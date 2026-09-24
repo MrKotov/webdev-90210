@@ -8,14 +8,18 @@ See `SPEC.md` for goals, non-goals and acceptance criteria.
 
 ## Commands
 <!-- How to install, run, test. Keep these exact and working. -->
-- Install: 
-- Run: 
-- Test: 
-- Coverage: 
-- MCP server: 
+- Install: `npm ci`
+- Run: `npm run dev` (port 3000, needs a `.env` copied from `.env.example`)
+- Test: `npm test`
+- Coverage: `npm run coverage`
+- MCP server: `npm run mcp`
 
 ## Conventions
 <!-- Folder layout, naming, where business rules live, how errors are returned to the client. -->
+- `src/routes/` holds HTTP handlers, `src/services/` holds the rules, `src/data/` is the only place that writes SQL.
+- A rule belongs in a service. A route handler may read the request and pick a status code, nothing else.
+- Errors leave a service as a typed error with a `code`; `src/http.js` turns that into a status and a message a user can read.
+- Migrations are numbered files under `migrations/` and are never edited once pushed.
 
 ## Layers
 <!-- Fill in the file or folder for each layer. -->
