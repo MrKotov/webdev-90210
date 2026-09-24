@@ -1,0 +1,177 @@
+# Runs your tests on every push and pull request. Works for Node and Python projects:
+# it runs whichever test setup it finds, and passes with a notice when there is none yet.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          # 22.9 or newer: the built-in coverage thresholds below landed in that version.
+          node-version: '22.x'
+
+      - name: Node tests
+        if: hashFiles('package.json') != ''
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          npm test
+
+      - name: Set up Python
+        if: hashFiles('requirements.txt', 'pyproject.toml') != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Python tests
+        if: hashFiles('requirements.txt', 'pyproject.toml') != ''
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; elif [ -f pyproject.toml ]; then pip install -e .; fi
+          pip install pytest
+          pytest
+
+      - name: No project yet
+        if: hashFiles('package.json', 'requirements.txt', 'pyproject.toml') == ''
+        run: echo "No package.json, requirements.txt or pyproject.toml yet. Nothing to test."
+
+      # From Exercise 4 on. An image that does not build is the most common reason a
+      # deploy fails, and finding it here takes a minute instead of waiting for the
+      # host to build it remotely and reading its log. Skipped until you write one.
+      - name: Docker image builds
+        if: hashFiles('Dockerfile') != ''
+        run: docker build -t ci-check .
+
+  # A separate job so its log is readable on its own, and so a coverage failure is
+  # unmistakably a coverage failure. From Exercise 4 on.
+  #
+  # Two gates, because they say different things. The service layer holds your rules,
+  # and a rule with no test is a rule nobody is checking: that one is 100%. The overall
+  # gate is 80%, because glue code and framework wiring are not worth padding tests for.
+  #
+  # Neither number tells you the tests are any good. A line can be covered by a test
+  # that asserts nothing. Coverage finds the code nobody looked at; it cannot find the
+  # code somebody looked at badly.
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Node coverage
+        if: hashFiles('package.json') != ''
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          # Your own script wins, if you have one: a project on Vitest or Jest is not wrong.
+          if node -e "process.exit(require('./package.json').scripts?.coverage ? 0 : 1)"; then
+            npm run coverage
+          else
+            node --test --experimental-test-coverage \
+              --test-coverage-include='src/services/**' --test-coverage-exclude='test/**' \
+              --test-coverage-lines=100 --test-coverage-functions=100
+            node --test --experimental-test-coverage \
+              --test-coverage-include='src/**' --test-coverage-exclude='test/**' \
+              --test-coverage-lines=80
+          fi
+
+      - name: Set up Python
+        if: hashFiles('requirements.txt', 'pyproject.toml') != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Python coverage
+        if: hashFiles('requirements.txt', 'pyproject.toml') != ''
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; elif [ -f pyproject.toml ]; then pip install -e .; fi
+          pip install pytest pytest-cov
+          pytest --cov=src/services --cov-fail-under=100
+          pytest --cov=src --cov-fail-under=80
+
+      - name: No project yet
+        if: hashFiles('package.json', 'requirements.txt', 'pyproject.toml') == ''
+        run: echo "Nothing to measure yet."
+
+  # From Exercise 1 on: does your MCP server still answer initialize and tools/list
+  # the way a client expects? Skipped until you add an "mcp" script to package.json.
+  mcp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+      - name: MCP conformance
+        run: |
+          if node -e "process.exit(require('./package.json').scripts?.mcp ? 0 : 1)" 2>/dev/null; then
+            if [ -f package-lock.json ]; then npm ci; else npm install; fi
+            node mcp-server/check.mjs -- npm run --silent mcp
+          else
+            echo "No \"mcp\" script in package.json yet. Add one so the agent and CI can both start your server."
+          fi
+
+  # The spec is a deliverable, so it is checked like one: it cannot quietly rot
+  # while the code moves on. From Exercise 2 on.
+  spec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+      - name: SPEC.md is still filled in
+        run: node checks/ex2.mjs
+
+  # The hand-in check. When you push a tag -- ex1 to ex5, or project -- this runs the
+  # self-check for that exercise, the same one you run yourself with `node checks/ex3.mjs`.
+  #
+  # It runs here so the course site can read the result without ever running your code:
+  # it asks GitHub whether this job went green on the commit you tagged. Nothing is sent
+  # anywhere, and the check is the one in your own repository, which you can read.
+  #
+  # Exercise 4's check needs your live URL. Put it in Settings -> Secrets and variables ->
+  # Actions -> Variables, named APP_URL, once you have deployed.
+  exercise-check:
+    if: startsWith(github.ref, 'refs/tags/ex') || github.ref == 'refs/tags/project'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # the checks read your history: five steps in Exercise 3, test-before-fix in Exercise 5
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Install, if there is anything to install
+        run: |
+          if [ -f package-lock.json ]; then npm ci
+          elif [ -f package.json ]; then npm install
+          fi
+
+      - name: Run the check for this tag
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            ex1)     node mcp-server/check.mjs -- npm run --silent mcp ;;
+            ex4)     node checks/ex4.mjs "${APP_URL}" ;;
+            project) node checks/project.mjs ;;
+            ex*)     node checks/"${GITHUB_REF_NAME}".mjs ;;
+          esac
